@@ -1,0 +1,10 @@
+{
+  "tools": [
+    {
+      "type": "mcp",
+      "provider": "sqlite",
+      "path": "./database/weather.db"
+    }
+  ],
+  "instructions": "You are a TypeScript developer's assistant. You can query and update weather data using the weather.db SQLite database."
+}
