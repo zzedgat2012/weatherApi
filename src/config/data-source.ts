@@ -1,10 +1,8 @@
 import "reflect-metadata";
 import { DataSource } from "typeorm";
-import { LoggableClass, LogMethod } from "../decorators";
 import { WeatherLog } from "../entities/WeatherLog";
 import { debugDB, logger } from "./logger";
 
-@LoggableClass
 export class DatabaseManager {
     private static instance: DatabaseManager;
     private dataSource: DataSource;
@@ -21,52 +19,93 @@ export class DatabaseManager {
         });
     }
 
-    public static getInstance(): DatabaseManager {
+    /**
+     * Get singleton instance of DatabaseManager
+     */
+    static getInstance(): DatabaseManager {
         if (!DatabaseManager.instance) {
             DatabaseManager.instance = new DatabaseManager();
         }
         return DatabaseManager.instance;
     }
 
-    @LogMethod
-    public async initialize(): Promise<void> {
-        try {
-            await this.dataSource.initialize();
-            debugDB('Database connection established successfully');
-            logger.info('Database connection established', { database: 'weather.db' });
-        } catch (error) {
-            debugDB('Database connection failed:', error);
-            logger.error('Database connection failed', { 
-                error: error instanceof Error ? error.message : String(error) 
-            });
-            throw error;
+    /**
+     * Initialize database connection
+     */
+    async initialize(): Promise<DataSource> {
+        if (!this.dataSource.isInitialized) {
+            try {
+                debugDB('Initializing database connection...');
+                logger.info('Database initialization started');
+                
+                await this.dataSource.initialize();
+                
+                debugDB('Database connection initialized successfully');
+                logger.info('Database connection established', {
+                    type: this.dataSource.options.type,
+                    database: this.dataSource.options.database
+                });
+                
+                return this.dataSource;
+            } catch (error) {
+                const err = error as Error;
+                debugDB('Database initialization failed:', err);
+                logger.error('Database initialization failed', {
+                    error: err.message,
+                    stack: err.stack
+                });
+                throw new Error(`Database initialization failed: ${err.message}`);
+            }
         }
-    }
-
-    @LogMethod
-    public async destroy(): Promise<void> {
-        try {
-            await this.dataSource.destroy();
-            debugDB('Database connection closed successfully');
-            logger.info('Database connection closed');
-        } catch (error) {
-            debugDB('Error closing database connection:', error);
-            logger.error('Error closing database connection', { 
-                error: error instanceof Error ? error.message : String(error) 
-            });
-            throw error;
-        }
-    }
-
-    public getDataSource(): DataSource {
+        
+        debugDB('Database already initialized, returning existing connection');
         return this.dataSource;
     }
 
-    @LogMethod
-    public isInitialized(): boolean {
-        return this.dataSource.isInitialized;
+    /**
+     * Get the DataSource instance
+     */
+    getDataSource(): DataSource {
+        if (!this.dataSource.isInitialized) {
+            throw new Error('Database not initialized. Call initialize() first.');
+        }
+        return this.dataSource;
+    }
+
+    /**
+     * Close database connection
+     */
+    async close(): Promise<void> {
+        if (this.dataSource.isInitialized) {
+            debugDB('Closing database connection...');
+            logger.info('Closing database connection');
+            
+            await this.dataSource.destroy();
+            
+            debugDB('Database connection closed');
+            logger.info('Database connection closed');
+        }
     }
 }
 
-// Export singleton instance for backwards compatibility
-export const AppDataSource = DatabaseManager.getInstance().getDataSource();
+// Create and export the AppDataSource instance
+const dbManager = DatabaseManager.getInstance();
+
+// Initialize database on module load
+export const initializeDatabase = async (): Promise<DataSource> => {
+    return await dbManager.initialize();
+};
+
+// Export AppDataSource that can be used by repositories
+export const AppDataSource = new DataSource({
+    type: "sqlite",
+    database: "./database/weather.db",
+    synchronize: true,
+    logging: process.env.TYPEORM_LOGGING === 'true',
+    entities: [WeatherLog],
+    migrations: [],
+    subscribers: [],
+});
+
+// Legacy export for backward compatibility
+export const dataSource = AppDataSource;

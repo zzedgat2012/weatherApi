@@ -1,160 +1,172 @@
 import axios from "axios";
+import { DataSource } from "typeorm";
 import { AppDataSource } from "../config/data-source";
 import { debugService, logger } from "../config/logger";
-import VSCodeDebugger from "../config/vscode-debugger";
-import {
-  isValidCity,
-  LoggableClass,
-  LogMethod,
-  ValidateParams,
-  VSCodeDebug
-} from "../decorators";
 import { WeatherLog } from "../entities/WeatherLog";
+import { OpenWeatherApiResponse, WeatherDTO } from "../models/WeatherModels";
 
-interface OpenWeatherResponse {
-	name: string;
-	main: {
-		temp: number;
-		humidity: number;
-	};
-	weather: {
-		main: string;
-		description: string;
-	}[];
-}
-
-@LoggableClass
 export class WeatherService {
 	private static readonly API_KEY = process.env.OPENWEATHER_API_KEY;
 	private static readonly BASE_URL = process.env.OPENWEATHER_BASE_URL || "https://api.openweathermap.org/data/2.5";
+	private static dataSource: DataSource = AppDataSource;
 
 	static {
-		// Initialize watch properties for static members
-		VSCodeDebugger.watch('WeatherService.API_KEY', !!this.API_KEY, 'API Key availability');
-		VSCodeDebugger.watch('WeatherService.BASE_URL', this.BASE_URL, 'OpenWeather API Base URL');
+		debugService(`WeatherService initialized with API key: ${!!this.API_KEY}`);
+		debugService(`WeatherService BASE_URL: ${this.BASE_URL}`);
 	}
 
-	@VSCodeDebug({ 
-		watch: true, 
-		breakpoint: false, 
-		logArgs: true, 
-		logResult: true,
-		condition: (args) => args[0]?.length > 0 
-	})
-	@LogMethod
-	@ValidateParams(isValidCity)
-	static async getWeather(city: string) {
-		// Add to VSCode watch
-		VSCodeDebugger.watch('WeatherService.currentCity', city, 'Currently processing city');
-		VSCodeDebugger.watch('WeatherService.API_KEY_status', !!this.API_KEY, 'API Key availability');
-		
-		debugService(`Getting weather data for: ${city}`);
-		logger.info('Weather service called', { city });
-		
-		if (!WeatherService.API_KEY || WeatherService.API_KEY === 'demo_key_replace_with_real_key') {
-			const errorMsg = !WeatherService.API_KEY 
-				? "OpenWeather API key is not configured. Please set OPENWEATHER_API_KEY environment variable."
-				: "Demo API key detected. Please replace with your real OpenWeather API key.";
-			
-			VSCodeDebugger.error('API Key configuration error', errorMsg);
+	/**
+	 * Set data source for testing
+	 */
+	static setDataSource(dataSource: DataSource): void {
+		this.dataSource = dataSource;
+	}
+
+	/**
+	 * Get current data source
+	 */
+	static getDataSource(): DataSource {
+		return this.dataSource;
+	}
+
+	static async getWeather(city: string): Promise<WeatherDTO> {
+		if (!city || city.trim().length === 0) {
+			throw new Error('City name is required');
+		}
+
+		debugService(`Fetching weather for city: ${city}`);
+		logger.info('Weather service request initiated', { city });
+
+		if (!this.API_KEY) {
+			const errorMsg = 'OpenWeather API key is not configured. Please set OPENWEATHER_API_KEY environment variable.';
+			logger.error('API configuration error', { error: errorMsg });
 			throw new Error(errorMsg);
 		}
 
 		try {
-			// Watch API request data
 			const requestParams = {
 				q: city,
-				appid: WeatherService.API_KEY,
+				appid: this.API_KEY,
 				units: 'metric'
 			};
-			VSCodeDebugger.watch('WeatherService.apiRequest', requestParams, 'Current API request parameters');
 
-			// Fetch weather data from OpenWeather API
-			const response = await axios.get<OpenWeatherResponse>(
-				`${WeatherService.BASE_URL}/weather`,
-				{
-					params: requestParams
-				}
+			debugService('Making API request with params:', requestParams);
+			logger.info('Making external API request', { city, url: this.BASE_URL });
+
+			const response = await axios.get<OpenWeatherApiResponse>(
+				`${this.BASE_URL}/weather`,
+				{ params: requestParams }
 			);
 
-			const data = response.data;
-			VSCodeDebugger.watch('WeatherService.apiResponse', data, 'Raw API response data');
-			
-			// Format the weather data using private method
-			const weather = WeatherService.formatWeatherData(data);
-
-			debugService(`Weather data retrieved and formatted for ${city}`);
-			logger.debug('Weather data retrieved', { city, weather });
-			
-			// Persist to DB using private method
-			const logId = await WeatherService.persistWeatherData(weather);
-			
-			VSCodeDebugger.watch('WeatherService.formattedWeather', weather, 'Formatted weather data');
-			
-			debugService(`Weather data saved to database for ${city}`);
-			logger.info('Weather data persisted', { city, id: logId });
-			
-			return weather;
-		} catch (error) {
-			VSCodeDebugger.error(`Weather service error for ${city}`, error);
-			VSCodeDebugger.watch('WeatherService.lastError', error, 'Last error encountered');
-			
-			debugService(`Error in weather service for ${city}:`, error);
-			logger.error('Weather service error', { 
+			const { data } = response;
+			debugService(`API response received for ${city}:`, data);
+			logger.info('Weather API response received', { 
 				city, 
-				error: error instanceof Error ? error.message : String(error) 
+				temperature: data.main.temp,
+				description: data.weather[0].description 
 			});
-			
-			if (axios.isAxiosError(error)) {
-				VSCodeDebugger.watch('WeatherService.axiosError', {
-					status: error.response?.status,
-					data: error.response?.data,
-					message: error.message
-				}, 'Axios error details');
+
+			// Transform API response to our DTO format
+			const weather = new WeatherDTO({
+				city: data.name,
+				temperature: data.main.temp,
+				description: data.weather[0].description,
+				humidity: data.main.humidity,
+				windSpeed: data.wind.speed,
+				timestamp: new Date()
+			});
+
+			debugService(`Formatted weather data for ${city}:`, weather);
+			logger.info('Weather data formatted successfully', { city, weatherId: weather.id });
+
+			// Persist to database
+			await this.saveWeatherLog(weather);
+
+			return weather;
+
+		} catch (error: any) {
+			debugService(`Weather service error for ${city}:`, error);
+			logger.error('Weather service error', { city, error: error.message });
+
+			if (error.response) {
+				// The request was made and the server responded with a status code
+				// that falls out of the range of 2xx
+				debugService('API Error Response:', {
+					status: error.response.status,
+					statusText: error.response.statusText,
+					data: error.response.data
+				});
 				
-				if (error.response?.status === 404) {
-					throw new Error(`City "${city}" not found`);
+				if (error.response.status === 404) {
+					throw new Error(`City '${city}' not found. Please check the city name and try again.`);
+				} else if (error.response.status === 401) {
+					throw new Error('Invalid API key. Please check your OpenWeather API key configuration.');
 				}
-				if (error.response?.status === 401) {
-					throw new Error("Invalid API key");
-				}
-				throw new Error(`Weather API error: ${error.response?.data?.message || error.message}`);
+				throw new Error(`Weather API error: ${error.response.data?.message || error.response.statusText}`);
+			} else if (error.request) {
+				// The request was made but no response was received
+				throw new Error('Unable to reach weather service. Please check your internet connection.');
+			} else {
+				// Something happened in setting up the request that triggered an Error
+				throw new Error(`Weather service error: ${error.message}`);
 			}
-			throw new Error(`Failed to fetch weather data: ${error}`);
 		}
 	}
 
-	@VSCodeDebug({ watch: true, logResult: true })
-	@LogMethod
-	private static formatWeatherData(data: OpenWeatherResponse) {
-		VSCodeDebugger.watch('WeatherService.rawData', data, 'Raw OpenWeather API data');
-		
-		const formattedData = {
-			city: data.name,
-			temperature: `${Math.round(data.main.temp)}°C`,
-			humidity: `${data.main.humidity}%`,
-			conditions: data.weather[0].description.charAt(0).toUpperCase() + data.weather[0].description.slice(1)
-		};
-		
-		VSCodeDebugger.watch('WeatherService.formattedData', formattedData, 'Formatted weather data');
-		return formattedData;
+	static async saveWeatherLog(weather: WeatherDTO): Promise<void> {
+		debugService('Saving weather data to database:', weather.toJSON());
+
+		const repository = this.dataSource.getRepository(WeatherLog);
+		const log = repository.create({
+			city: weather.city,
+			temperature: weather.temperature,
+			description: weather.description,
+			humidity: weather.humidity,
+			windSpeed: weather.windSpeed,
+			timestamp: weather.timestamp
+		});
+
+		debugService('Created weather log entity:', log);
+		await repository.save(log);
+		logger.info('Weather data saved to database', { city: weather.city, logId: log.id });
 	}
 
-	@VSCodeDebug({ watch: true })
-	@LogMethod
-	private static async persistWeatherData(weather: any): Promise<number> {
-		VSCodeDebugger.watch('WeatherService.weatherToPersist', weather, 'Weather data being persisted');
-		
-		const repo = AppDataSource.getRepository(WeatherLog);
-		const log = repo.create(weather);
-		
-		VSCodeDebugger.watch('WeatherService.createdLog', log, 'Created weather log entity');
-		
-		const result = await repo.save(log);
-		const savedLog = Array.isArray(result) ? result[0] : result;
-		
-		VSCodeDebugger.watch('WeatherService.savedLogId', savedLog.id, 'Saved weather log ID');
-		
-		return savedLog.id;
+	static async getWeatherHistory(city: string, limit: number = 10): Promise<WeatherDTO[]> {
+		debugService(`Fetching weather history for ${city}, limit: ${limit}`);
+		logger.info('Weather history request initiated', { city, limit });
+
+		const repository = this.dataSource.getRepository(WeatherLog);
+		const logs = await repository.find({
+			where: { city },
+			order: { timestamp: 'DESC' },
+			take: limit
+		});
+
+		debugService(`Found ${logs.length} weather records for ${city}`);
+		logger.info('Weather history retrieved', { city, recordCount: logs.length });
+
+		return logs.map(log => new WeatherDTO({
+			id: log.id,
+			city: log.city,
+			temperature: log.temperature,
+			description: log.description,
+			humidity: log.humidity,
+			windSpeed: log.windSpeed,
+			timestamp: log.timestamp
+		}));
+	}
+
+	static async deleteWeatherHistory(city: string): Promise<number> {
+		debugService(`Deleting weather history for ${city}`);
+		logger.info('Weather history deletion request initiated', { city });
+
+		const repository = AppDataSource.getRepository(WeatherLog);
+		const result = await repository.delete({ city });
+
+		const deletedCount = result.affected || 0;
+		debugService(`Deleted ${deletedCount} weather records for ${city}`);
+		logger.info('Weather history deleted', { city, deletedCount });
+
+		return deletedCount;
 	}
 }

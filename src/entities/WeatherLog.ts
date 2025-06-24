@@ -1,73 +1,86 @@
 import { AfterInsert, BeforeInsert, Column, Entity, PrimaryGeneratedColumn } from "typeorm";
 import { debugDB, logger } from "../config/logger";
-import { LoggableClass, LogMethod } from "../decorators";
 
-@LoggableClass
 @Entity()
 export class WeatherLog {
     @PrimaryGeneratedColumn()
     id!: number;
 
-    @Column({ type: 'text' })
+    @Column("text")
     city!: string;
 
-    @Column({ type: 'text' })
-    temperature!: string;
+    @Column("real")
+    temperature!: number;
 
-    @Column({ type: 'text' })
-    humidity!: string;
+    @Column("text")
+    description!: string;
 
-    @Column({ type: 'text' })
-    conditions!: string;
+    @Column("real", { nullable: true })
+    humidity?: number;
 
-    @Column({ type: 'text', default: 'CURRENT_TIMESTAMP' })
-    createdAt!: Date;
+    @Column("real", { nullable: true })
+    windSpeed?: number;
+
+    @Column("real", { nullable: true })
+    windDirection?: number;
+
+    @Column("real", { nullable: true })
+    pressure?: number;
+
+    @Column("datetime")
+    timestamp!: Date;
 
     @BeforeInsert()
-    @LogMethod
-    private validateBeforeInsert(): void {
-        debugDB(`Validating weather log before insert for city: ${this.city}`);
-        logger.debug('Weather log validation', { city: this.city });
-        
-        if (!this.city || this.city.trim().length === 0) {
-            throw new Error('City is required');
-        }
-        if (!this.temperature) {
-            throw new Error('Temperature is required');
-        }
-        if (!this.humidity) {
-            throw new Error('Humidity is required');
-        }
-        if (!this.conditions) {
-            throw new Error('Conditions are required');
-        }
-    }
-
-    @AfterInsert()
-    @LogMethod
-    private logAfterInsert(): void {
-        debugDB(`Weather log inserted successfully with ID: ${this.id}`);
-        logger.info('Weather log created', { 
-            id: this.id, 
+    private beforeInsert(): void {
+        debugDB('WeatherLog entity before insert', {
             city: this.city,
-            temperature: this.temperature 
+            temperature: this.temperature,
+            description: this.description
+        });
+        
+        logger.info('Weather log entity prepared for insertion', {
+            city: this.city,
+            temperature: this.temperature,
+            description: this.description
         });
     }
 
-    @LogMethod
-    public toString(): string {
-        return `WeatherLog(id=${this.id}, city=${this.city}, temp=${this.temperature}, humidity=${this.humidity}, conditions=${this.conditions})`;
+    @AfterInsert()
+    private afterInsert(): void {
+        debugDB('WeatherLog entity after insert', {
+            id: this.id,
+            city: this.city,
+            timestamp: this.timestamp
+        });
+        
+        logger.info('Weather log entity successfully inserted', {
+            id: this.id,
+            city: this.city,
+            timestamp: this.timestamp
+        });
     }
 
-    @LogMethod
-    public toJSON(): object {
+    /**
+     * Convert entity to DTO format
+     */
+    toDTO(): any {
         return {
             id: this.id,
             city: this.city,
             temperature: this.temperature,
+            description: this.description,
             humidity: this.humidity,
-            conditions: this.conditions,
-            createdAt: this.createdAt
+            windSpeed: this.windSpeed,
+            windDirection: this.windDirection,
+            pressure: this.pressure,
+            timestamp: this.timestamp
         };
+    }
+
+    /**
+     * Convert entity to JSON format
+     */
+    toJSON(): any {
+        return this.toDTO();
     }
 }

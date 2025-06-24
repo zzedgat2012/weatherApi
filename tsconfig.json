@@ -1,11 +1,12 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "ESNext",
+    "module": "CommonJS",
     "moduleResolution": "Node",
     "outDir": "dist",
     "rootDir": "src",
     "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
     "strict": true,
@@ -19,7 +20,6 @@
   },
   "include": ["src/**/*"],
   "ts-node": {
-    "esm": true,
     "files": true,
     "experimentalSpecifierResolution": "node"
   }
